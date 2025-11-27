@@ -1,4 +1,3 @@
-# file: src/nfl_prop_predictor/train.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,6 +10,7 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import mean_squared_error, r2_score
 
+# Local imports (must exist)
 from .data_models import ModelCard, TrainConfig
 from .features import build_training_frame, feature_targets, load_defenses, load_games
 from .utils import TARGETS
@@ -20,7 +20,7 @@ def _time_aware_split(df: pd.DataFrame, val_size: float) -> Tuple[pd.DataFrame, 
     """Chronological split to avoid leakage."""
     df = df.sort_values("date")
     split_idx = int(len(df) * (1 - val_size))
-    split_idx = max(1, min(split_idx, len(df) - 1))  # why: ensure non-empty splits
+    split_idx = max(1, min(split_idx, len(df) - 1))  # ensure both sides non-empty
     return df.iloc[:split_idx], df.iloc[split_idx:]
 
 
@@ -29,43 +29,44 @@ def train_models(
     models_dir: str,
     config: TrainConfig = TrainConfig(),
 ) -> pd.DataFrame:
-    """Train one model per target; persist model, features, and model card."""
+    """
+    Train one HistGradientBoostingRegressor per target and persist:
+      - model.joblib
+      - features.txt
+      - model_card.json
+      - training_summary.csv (root of models_dir)
+    """
     data_dir_path = Path(data_dir)
     models_dir_path = Path(models_dir)
     models_dir_path.mkdir(parents=True, exist_ok=True)
 
+    # Load + featurize
     games = load_games(str(data_dir_path / "games.csv"))
     defenses = load_defenses(str(data_dir_path / "defenses.csv"))
     df = build_training_frame(games, defenses)
 
-    results = []
+    results: list[tuple[str, float, float, float]] = []
 
     for target in TARGETS:
-        # Require at least a previous game (lag1) to form features
         rows = df[df.get(f"{target}_lag1").notna()].copy()
         if rows.empty or len(rows) < 20:
-            # Skip targets without enough history
-            continue
+            continue  # skip if not enough history
 
         train_df, val_df = _time_aware_split(rows, config.validation_size)
         X_tr, y_tr = feature_targets(train_df, target)
         X_va, y_va = feature_targets(val_df, target)
 
-        # Train
         model = HistGradientBoostingRegressor(random_state=config.random_state)
         model.fit(X_tr.fillna(0.0), y_tr)
 
-        # Validate
         va_pred = model.predict(X_va.fillna(0.0))
         rmse = float(mean_squared_error(y_va, va_pred, squared=False))
         r2 = float(r2_score(y_va, va_pred))
-        resid_std = float(np.std(y_va - va_pred, ddof=1)) if len(y_va) > 1 else 10.0  # why: used for prop probability
+        resid_std = float(np.std(y_va - va_pred, ddof=1)) if len(y_va) > 1 else 10.0  # used for P(over)
 
-        # Permutation importances (best-effort)
+        # Best-effort feature importances
         try:
-            pi = permutation_importance(
-                model, X_va.fillna(0.0), y_va, n_repeats=5, random_state=config.random_state
-            )
+            pi = permutation_importance(model, X_va.fillna(0.0), y_va, n_repeats=5, random_state=config.random_state)
             top_feats = ", ".join(
                 f"{name}:{imp:.3f}"
                 for name, imp in sorted(
@@ -75,7 +76,7 @@ def train_models(
         except Exception:
             top_feats = "n/a"
 
-        # Persist artifacts
+        # Persist artifacts per target
         out_dir = models_dir_path / target
         out_dir.mkdir(parents=True, exist_ok=True)
         dump(model, out_dir / "model.joblib")
@@ -102,7 +103,6 @@ def train_models(
     return summary
 
 
-# Optional: allow `python -m nfl_prop_predictor.train --data-dir ... --models-dir ...`
 if __name__ == "__main__":
     import argparse
 
