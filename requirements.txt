@@ -7,3 +7,6 @@ typer>=0.12
 fastapi>=0.115
 uvicorn>=0.30
 scipy>=1.11
+nflreadpy>=0.3.0
+pyarrow>=14   
+polars>=0.20
