@@ -16,3 +16,10 @@ Train ML models on historical player game logs + opponent defensive ratings, the
 - Required: player_id, player_name, team, position, opp_team, date, season, week, home_away
 - Optional lines: line_pass_yards, line_rush_yards, line_rec_yards, line_receptions, line_pass_td, line_rush_td, line_rec_td
 - Optional odds: spread, total
+## Quickstart
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+PYTHONPATH=src python -m nfl_prop_predictor.cli train --data-dir ./data --models-dir ./models
+PYTHONPATH=src python -m nfl_prop_predictor.cli predict --data-dir ./data --models-dir ./models --schedule ./data/schedule.csv --out ./preds.csv
+PYTHONPATH=src python -m nfl_prop_predictor.cli line-prob --predictions ./preds.csv --out ./props.csv
