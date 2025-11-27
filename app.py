@@ -1,16 +1,16 @@
-# file: app.py  (root)
+# file: app.py  (place at repo root)
+from __future__ import annotations
+
 """
 Streamlit UI for NFL Prop Predictor with free data fetch (no API key) via nflreadpy.
 Run:
   PYTHONPATH=src streamlit run app.py
 """
-from __future__ import annotations
 
-import os
 import tempfile
 from math import erf, sqrt
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -33,10 +33,12 @@ except Exception as e:
 # --- Free data source: nflverse via nflreadpy (no API key) ---
 import nflreadpy as nfl  # public CC-BY datasets
 
+
 # ---------- Helpers ----------
 def normal_cdf(x: np.ndarray | float) -> np.ndarray | float:
-    # Standard normal CDF without SciPy.
+    """Standard normal CDF (no SciPy)."""
     return 0.5 * (1.0 + np.vectorize(lambda v: erf(v / sqrt(2.0)))(x))
+
 
 def _pick_player_id(df: pd.DataFrame) -> str:
     for c in ["player_id", "gsis_id", "player_gsis_id", "nfl_id", "pfr_id", "esb_id"]:
@@ -44,15 +46,18 @@ def _pick_player_id(df: pd.DataFrame) -> str:
             return c
     raise RuntimeError("No player id column found in source data.")
 
+
 def _position_from_row(row: pd.Series) -> str:
     pos = str(row.get("position") or row.get("player_position") or "").upper()
-    return pos if pos in {"QB","RB","WR","TE"} else pos
+    return pos if pos in {"QB", "RB", "WR", "TE"} else pos
+
 
 def _parse_seasons(spec: str) -> List[int]:
     if "-" in spec:
         a, b = spec.split("-", 1)
         return list(range(int(a), int(b) + 1))
     return [int(x) for x in spec.split(",") if x.strip()]
+
 
 def _build_games(seasons: List[int]) -> pd.DataFrame:
     ps = nfl.load_player_stats(seasons).to_pandas()
@@ -66,6 +71,7 @@ def _build_games(seasons: List[int]) -> pd.DataFrame:
         "season": "season",
         "week": "week",
         "home_away": "home_away",
+        # targets
         "passing_yards": "pass_yards",
         "rushing_yards": "rush_yards",
         "receiving_yards": "rec_yards",
@@ -73,6 +79,7 @@ def _build_games(seasons: List[int]) -> pd.DataFrame:
         "passing_tds": "pass_td",
         "rushing_tds": "rush_td",
         "receiving_tds": "rec_td",
+        # context
         "team_score": "team_points",
         "opponent_score": "opp_points",
         "spread_line": "spread",
@@ -85,7 +92,7 @@ def _build_games(seasons: List[int]) -> pd.DataFrame:
     mapping = {src: dst for src, dst in mapping.items() if src in ps.columns}
     df = ps.rename(columns=mapping)
 
-    req = ["player_id","player_name","team","opp_team","date","season","week","home_away"]
+    req = ["player_id", "player_name", "team", "opp_team", "date", "season", "week", "home_away"]
     for col in req:
         if col not in df.columns:
             raise RuntimeError(f"games.csv missing required column from source: {col}")
@@ -96,16 +103,31 @@ def _build_games(seasons: List[int]) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
     df["team"] = df["team"].str.upper()
     df["opp_team"] = df["opp_team"].str.upper()
-    df["home_away"] = df["home_away"].fillna("").str.upper().map({"HOME":"H","AWAY":"A","H":"H","A":"A"})
+    df["home_away"] = df["home_away"].fillna("").str.upper().map({"HOME": "H", "AWAY": "A", "H": "H", "A": "A"})
 
     for t in TARGETS:
         df[t] = pd.to_numeric(df[t], errors="coerce") if t in df.columns else np.nan
-    for c in ["team_points","opp_points","spread","total","snap_pct","targets","rush_att","pass_att"]:
+    for c in ["team_points", "opp_points", "spread", "total", "snap_pct", "targets", "rush_att", "pass_att"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    keep = list({*req, "position", *TARGETS, "team_points","opp_points","spread","total","snap_pct","targets","rush_att","pass_att"})
-    return df[keep].sort_values(["player_id","date"])
+    keep = list(
+        {
+            *req,
+            "position",
+            *TARGETS,
+            "team_points",
+            "opp_points",
+            "spread",
+            "total",
+            "snap_pct",
+            "targets",
+            "rush_att",
+            "pass_att",
+        }
+    )
+    return df[keep].sort_values(["player_id", "date"])
+
 
 def _build_defenses(games: pd.DataFrame) -> pd.DataFrame:
     rows = []
@@ -113,18 +135,27 @@ def _build_defenses(games: pd.DataFrame) -> pd.DataFrame:
         if metric not in games.columns:
             continue
         tmp = (
-            games.groupby(["season","opp_team","position"], as_index=False)[metric]
+            games.groupby(["season", "opp_team", "position"], as_index=False)[metric]
             .sum()
-            .rename(columns={"opp_team":"team", metric:"sum_val"})
+            .rename(columns={"opp_team": "team", metric: "sum_val"})
         )
-        counts = games.groupby(["season","opp_team","position"], as_index=False).size().rename(columns={"opp_team":"team","size":"n"})
-        tmp = tmp.merge(counts, on=["season","team","position"], how="left")
+        counts = (
+            games.groupby(["season", "opp_team", "position"], as_index=False)
+            .size()
+            .rename(columns={"opp_team": "team", "size": "n"})
+        )
+        tmp = tmp.merge(counts, on=["season", "team", "position"], how="left")
         tmp["allowed_per_game"] = tmp["sum_val"] / tmp["n"].replace(0, np.nan)
         tmp["metric"] = metric
-        rows.append(tmp[["season","team","position","metric","allowed_per_game"]])
+        rows.append(tmp[["season", "team", "position", "metric", "allowed_per_game"]])
     out = pd.concat(rows, ignore_index=True)
-    out["rank"] = out.groupby(["season","position","metric"])["allowed_per_game"].rank(method="min", ascending=True).astype(int)
-    return out.sort_values(["season","position","metric","rank"])
+    out["rank"] = (
+        out.groupby(["season", "position", "metric"])["allowed_per_game"]
+        .rank(method="min", ascending=True)
+        .astype(int)
+    )
+    return out.sort_values(["season", "position", "metric", "rank"])
+
 
 def _build_player_schedule_next_week(seasons: List[int]) -> pd.DataFrame:
     season_latest = max(seasons)
@@ -142,15 +173,19 @@ def _build_player_schedule_next_week(seasons: List[int]) -> pd.DataFrame:
         stats["__pos__"] = ""
         pos_col = "__pos__"
     stats["__pos_norm__"] = stats[pos_col].astype(str).str.upper()
-    skilled = stats[stats["__pos_norm__"].isin(["QB","RB","WR","TE"])].copy()
-    skilled = skilled.rename(columns={pid:"player_id"})
-    players = skilled[["player_id","player_name","recent_team",pos_col]].dropna().drop_duplicates()
-    players = players.rename(columns={"recent_team":"team", pos_col:"position"})
+    skilled = stats[stats["__pos_norm__"].isin(["QB", "RB", "WR", "TE"])].copy()
+    skilled = skilled.rename(columns={pid: "player_id"})
+    players = skilled[["player_id", "player_name", "recent_team", pos_col]].dropna().drop_duplicates()
+    players = players.rename(columns={"recent_team": "team", pos_col: "position"})
     players["team"] = players["team"].str.upper()
     players["position"] = players["position"].astype(str).str.upper()
 
     def team_rows(frame, team_col, opp_col, hoa):
-        df = frame[[team_col, opp_col, "season", "week", "date"]].rename(columns={team_col:"team", opp_col:"opp_team"}).copy()
+        df = (
+            frame[[team_col, opp_col, "season", "week", "date"]]
+            .rename(columns={team_col: "team", opp_col: "opp_team"})
+            .copy()
+        )
         df["home_away"] = hoa
         return df
 
@@ -160,13 +195,17 @@ def _build_player_schedule_next_week(seasons: List[int]) -> pd.DataFrame:
     ).drop_duplicates()
 
     sched_players = players.merge(games_teams, on="team", how="inner")
-    sched_players = sched_players[["player_id","player_name","team","position","opp_team","date","season","week","home_away"]].drop_duplicates()
-    return sched_players.sort_values(["team","position","player_name"])
+    sched_players = sched_players[
+        ["player_id", "player_name", "team", "position", "opp_team", "date", "season", "week", "home_away"]
+    ].drop_duplicates()
+    return sched_players.sort_values(["team", "position", "player_name"])
+
 
 @st.cache_data(show_spinner=True)
 def fetch_and_build(out_dir: str, seasons_text: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     seasons = _parse_seasons(seasons_text)
-    out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
     games = _build_games(seasons)
     defenses = _build_defenses(games)
     schedule = _build_player_schedule_next_week(seasons)
@@ -175,13 +214,12 @@ def fetch_and_build(out_dir: str, seasons_text: str) -> Tuple[pd.DataFrame, pd.D
     schedule.to_csv(out / "schedule.csv", index=False)
     return games, defenses, schedule
 
-def _write_temp_csv(df: pd.DataFrame) -> str:
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
-    df.to_csv(tmp.name, index=False)
-    return tmp.name
 
 def _predict_from_disk(data_dir: str, models_dir: str, schedule_csv_path: str) -> pd.DataFrame:
-    return predict_schedule(data_dir=data_dir, models_dir=models_dir, schedule_path=schedule_csv_path, output_path=None)
+    return predict_schedule(
+        data_dir=data_dir, models_dir=models_dir, schedule_path=schedule_csv_path, output_path=None
+    )
+
 
 # ---------- UI ----------
 st.title("🏈 NFL Prop Predictor — Zero-Upload Edition")
@@ -203,7 +241,9 @@ if btn_fetch:
     with st.spinner("Fetching and building datasets..."):
         try:
             games, defenses, schedule = fetch_and_build(data_dir, seasons_text)
-            st.success(f"Data ready — games:{len(games):,} defenses:{len(defenses):,} schedule rows:{len(schedule):,}")
+            st.success(
+                f"Data ready — games:{len(games):,} defenses:{len(defenses):,} schedule rows:{len(schedule):,}"
+            )
             st.dataframe(schedule.head(50), use_container_width=True, hide_index=True)
         except Exception as e:
             st.error(f"Fetch failed: {e}")
@@ -232,7 +272,9 @@ if btn_predict:
     else:
         with st.spinner("Predicting..."):
             try:
-                preds = _predict_from_disk(data_dir=data_dir, models_dir=models_dir, schedule_csv_path=schedule_path)
+                preds = _predict_from_disk(
+                    data_dir=data_dir, models_dir=models_dir, schedule_csv_path=schedule_path
+                )
                 st.subheader("Predictions")
                 gcol1, gcol2 = st.columns(2)
                 tgt = gcol1.selectbox("Prop target", TARGETS, index=2)
